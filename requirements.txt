@@ -1,0 +1,13 @@
+# Application dependencies. Install a ROCm (or CPU) PyTorch build FIRST.
+# See README.md for platform-specific torch install commands.
+streamlit>=1.36.0
+numpy>=1.26.0
+pillow>=10.4.0
+opencv-python-headless>=4.9.0
+pandas>=2.2.0
+python-dotenv>=1.0.1
+openai>=1.51.0
+ultralytics>=8.3.0
+transformers>=4.44.0
+accelerate>=0.34.0
+safetensors>=0.4.0

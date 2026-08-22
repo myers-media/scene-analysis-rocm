@@ -1,0 +1,19 @@
+services:
+  scene-analysis:
+    build: .
+    ports:
+      - "8501:8501"
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+    ipc: host
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      HIP_VISIBLE_DEVICES: ${HIP_VISIBLE_DEVICES:-0}
+    volumes:
+      - ./hf_cache:/app/hf_cache
+      - ./outputs:/app/outputs

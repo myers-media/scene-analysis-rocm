@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scene-analysis-rocm"
+version = "1.0.0"
+description = "ROCm-accelerated scene analysis with a Streamlit frontend"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Scene Analysis ROCm" }]
+keywords = ["rocm", "amd", "scene-analysis", "computer-vision", "streamlit"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Scientific/Engineering :: Image Recognition",
+]
+dependencies = [
+  "streamlit>=1.36.0",
+  "numpy>=1.26.0",
+  "pillow>=10.4.0",
+  "opencv-python-headless>=4.9.0",
+  "pandas>=2.2.0",
+  "python-dotenv>=1.0.1",
+  "openai>=1.51.0",
+  "ultralytics>=8.3.0",
+  "transformers>=4.44.0",
+  "accelerate>=0.34.0",
+  "safetensors>=0.4.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-cov>=5.0"]
+
+[project.scripts]
+scene-analyze = "scene_analysis.cli:main"
+rocm-probe = "scene_analysis.device:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
