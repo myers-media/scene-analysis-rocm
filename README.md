@@ -12,8 +12,8 @@ On ROCm builds of PyTorch the `torch.cuda` API is the HIP compatibility layer, s
 | --- | --- |
 | **Upload image** | Still photo (`jpg`, `jpeg`, `png`, `bmp`, `webp`). Full analysis in one pass. |
 | **Upload video** | Samples frames evenly through the clip and reports objects over time. The file is written under `outputs/` so it can be re-read. |
-| **Live camera** | Continuous webcam, `/dev/video*`, or **RTSP/HTTP** stream on the Streamlit **host**. YOLO on every frame. **Frames are not saved to disk.** |
-| **Camera snapshot** | One still from the **browser** camera (the laptop or phone viewing the page). |
+| **Live camera** | YOLO on a live stream. Choose **This browser** (same webcams as Camera snapshot, including a remote PC) or **Streamlit host** (OpenCV index 0–5 / RTSP on the server). **Frames are not saved to disk.** |
+| **Camera snapshot** | One still from the **browser** on the machine viewing the page. Pick a camera in the dropdown after Allow. Remote devices need **HTTPS** (`https://MACHINE_NAME:8501`). |
 | **Synthetic demo** | Built-in test scene so the UI works without a photo. |
 
 ### Vision tasks
@@ -31,21 +31,32 @@ Results include an annotated overlay, timings per task, JSON export, and (for vi
 
 ### Live camera
 
-Live mode is a realtime feed, not a snapshot.
+Live mode is a realtime feed, not a snapshot. Pick a location first:
 
-- Opens a device on the **machine running Streamlit** (USB webcam index `0`, `1`, …; a path like `/dev/video0`; or `rtsp://host/stream`).
-- It is **not** the browser camera. Use **Camera snapshot** to grab a still from the device viewing the page.
+- **This browser (this PC or phone)** — the same device list as Camera snapshot (`getUserMedia`). **Probe local cameras** rescans webcams on the machine viewing the page. Allow, pick a camera, then **Start live feed**. Remote viewers need HTTPS.
+- **Streamlit host (server)** — OpenCV on the machine running Streamlit (index `0`–`5`, `/dev/video0`, or `rtsp://host/stream`). **Probe host cameras** lists those indexes. This cannot see a webcam on a remote laptop.
 - YOLO runs on **every frame**. Models stay resident in VRAM while the feed is running.
 - CLIP scene tags and composition refresh every **N** frames (default 15) so the overlay stays realtime. The last tags stay on screen between refreshes.
 - Caption, depth, and the LLM narrative stay off unless you enable **Allow caption/depth on live** (slow). The LLM narrative is never called from the live loop.
 - The UI shows FPS, frame count, object count, backend (`ROCM` / `CUDA` / `CPU`), and a live class histogram.
-- **Probe local cameras** tries indexes 0–5 and lists devices that returned a frame.
-- Capture sizes: 640×480, 1280×720, 1920×1080.
+- Host capture sizes: 640×480, 1280×720, 1920×1080. Browser live sends JPEG frames (max width 960) from the viewer.
 - **No disk writes.** Each frame is read into RAM, analyzed, drawn in the UI, then discarded when the next frame arrives. Session state keeps only tags, class counts, FPS, and frame index — not pixels. A long live session will not fill the disk. (Uploaded videos are the exception: they are stored under `outputs/`.)
 
-If Zoom or Teams has the webcam, release it first. Capture backends: DirectShow / Media Foundation on Windows, AVFoundation on macOS, V4L2 on Linux, FFmpeg for RTSP.
+If Zoom or Teams has a **host** webcam, release it first. Host capture backends: DirectShow / Media Foundation on Windows, AVFoundation on macOS, V4L2 on Linux, FFmpeg for RTSP.
 
-The CLI live window (`python -m scene_analysis --live`) is the same: OpenCV preview only, no image files written.
+The CLI live window (`python -m scene_analysis --live`) is **host OpenCV only** (no browser camera), preview only, no image files written.
+
+### Camera snapshot (this browser’s webcam)
+
+Use this when the camera is on the **computer viewing the page** (a phone or another PC on `https://MACHINE_NAME:8501`).
+
+1. Open the app over **HTTPS** (see [Run the web UI](#run-the-web-ui)). Trust the self-signed certificate once.
+2. Choose **Camera snapshot**.
+3. Click **Allow** when the browser asks for the camera.
+4. In the in-page **Camera on this device** list, pick the actual webcam (not Streamlit’s stock widget). Many desktops have no `facingMode=user` / “front” device, so Allow followed by “no camera” usually means the wrong device was requested.
+5. **Start camera** (or **Probe / rescan devices** if the list is empty), then **Capture still**, then **Analyze scene**.
+
+**Camera snapshot** is a still from this browser. For a **live** stream from the same cameras, use **Live camera → This browser**. Host OpenCV indexes are **Live camera → Streamlit host**.
 
 ## Architecture
 
@@ -54,7 +65,7 @@ flowchart LR
   subgraph inputs [Inputs]
     Image[Image]
     Video[Video]
-    Live[Live webcam / RTSP]
+    Live[Live: this browser or host]
     Snap[Browser snapshot]
   end
   subgraph ui [Streamlit / CLI]
@@ -158,14 +169,37 @@ pip install -e .
 
 ## Run the web UI
 
+Prefer the startup helpers. They create a self-signed TLS certificate (if needed) and bind on all interfaces so another device can use **Camera snapshot** over HTTPS:
+
+```bash
+./run.sh          # Linux, WSL2, or Git Bash (works with a Windows `.venv\Scripts` tree)
+.\run.ps1         # Windows PowerShell
+```
+
+That is equivalent to:
+
+```bash
+python scripts/run_ui.py --port 8501
+```
+
+The cert is written to `certs/cert.pem` and `certs/key.pem` (gitignored). SANs include `localhost`, the machine hostname, and local IPs. The cert is reused until it is near expiry or those names/IPs change.
+
+Open:
+
+- `https://localhost:8501` on this machine
+- `https://MACHINE_NAME:8501` or `https://<lan-ip>:8501` from a phone or other PC
+
+Browsers will warn about a self-signed certificate. Continue once (or import `certs/cert.pem` as a trusted CA). After that, `getUserMedia` is allowed so **Camera snapshot** and **Live camera → This browser** can use the remote device’s webcam.
+
+Allow inbound TCP **8501** on the host firewall if the other device cannot connect. Use `--http` on `scripts/run_ui.py` only for local HTTP (remote webcam will not work).
+
+Plain HTTP (no cert, localhost only):
+
 ```bash
 streamlit run app.py
 ```
 
-Linux helper: `./run.sh`  
-Windows helper: `.\run.ps1`
-
-Open http://localhost:8501.
+**Live camera → This browser** and **Camera snapshot** both use the webcam on the machine viewing the page (HTTPS required remotely). **Live camera → Streamlit host** uses OpenCV on the server and does not need HTTPS for capture. After Allow, pick the camera in the in-page dropdown; Streamlit’s stock widget often requests `facingMode=user` / device 0 and then reports no camera on desktops.
 
 ### Sidebar
 
@@ -181,7 +215,7 @@ Open http://localhost:8501.
 
 ### Main pane
 
-Pick an input, then **Analyze scene** (still image, video, snapshot, demo). For **Live camera**, use **Start live feed** / **Stop** instead of Analyze.
+Pick an input, then **Analyze scene** (still image, video, snapshot, demo). For **Live camera**, choose **This browser** or **Streamlit host**, then **Start live feed** / **Stop**. For **Camera snapshot**, Allow → choose a camera → Capture still → Analyze.
 
 Tabs after a still analysis: Overview, Detections, Composition, Depth, Performance, JSON.
 
@@ -328,10 +362,18 @@ pip install -e ".[dev]"
 pytest
 ```
 
+## Session notes
+
+A recap of the build (decisions, bugs, how to resume) is in [`docs/SESSION-2026-08-22.md`](docs/SESSION-2026-08-22.md). Later Grok sessions should also read `AGENTS.md`.
+
 ## Project layout
 
 ```
 app.py                         Streamlit frontend (including live feed)
+scripts/run_ui.py              Starts Streamlit with an auto-generated HTTPS cert
+src/scene_analysis/ssl_cert.py Self-signed cert (hostname + LAN IPs)
+src/scene_analysis/web_camera.py  Browser webcam picker (remote Camera snapshot)
+src/scene_analysis/web_camera_frontend/  HTML/JS getUserMedia device list
 src/scene_analysis/
   device.py                    ROCm / HIP / CPU probe
   pipeline.py                  Orchestrates tasks + timings

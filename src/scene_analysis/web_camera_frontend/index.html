@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", sans-serif;
+      background: #0e1116;
+      color: #f4f1ec;
+    }
+    .wrap { padding: 8px 4px 12px; }
+    label { display: block; font-size: 13px; margin-bottom: 6px; color: #c7c2ba; }
+    select, button {
+      font: inherit;
+      border-radius: 8px;
+      border: 1px solid #2a303c;
+      padding: 8px 10px;
+    }
+    select {
+      width: 100%;
+      background: #191c24;
+      color: #f4f1ec;
+      margin-bottom: 8px;
+    }
+    video {
+      width: 100%;
+      max-height: 280px;
+      background: #111;
+      border-radius: 12px;
+      display: block;
+    }
+    .row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+    button {
+      background: #ed1c24;
+      color: white;
+      border: 0;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.secondary { background: #3b4252; }
+    .err { color: #ffb4a8; font-size: 13px; margin-top: 8px; white-space: pre-wrap; }
+    .ok { color: #8bd49c; font-size: 13px; margin-top: 8px; }
+    .live #capture { display: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap" id="root">
+    <label for="cams">Camera on this device (the computer viewing the page)</label>
+    <select id="cams"><option value="">Starting…</option></select>
+    <video id="preview" autoplay playsinline muted></video>
+    <div class="row">
+      <button id="start" type="button">Start camera</button>
+      <button id="capture" type="button">Capture still</button>
+      <button id="refresh" class="secondary" type="button">Probe / rescan devices</button>
+    </div>
+    <div id="msg" class="err"></div>
+  </div>
+  <script>
+    function send(type, data) {
+      const payload = Object.assign({ isStreamlitMessage: true, type: type }, data || {});
+      window.parent.postMessage(payload, "*");
+    }
+    send("streamlit:componentReady", { apiVersion: 1 });
+    send("streamlit:setFrameHeight", { height: 450 });
+
+    const video = document.getElementById("preview");
+    const select = document.getElementById("cams");
+    const msg = document.getElementById("msg");
+    const root = document.getElementById("root");
+    let stream = null;
+    let liveEnabled = false;
+    let liveTimer = null;
+    let lastScan = null;
+    let intervalMs = 300;
+
+    function showError(text) {
+      msg.className = "err";
+      msg.textContent = text;
+    }
+    function showOk(text) {
+      msg.className = "ok";
+      msg.textContent = text;
+    }
+
+    async function stopStream() {
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
+        stream = null;
+      }
+      video.srcObject = null;
+    }
+
+    async function listDevices() {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter((d) => d.kind === "videoinput");
+      const previous = select.value;
+      select.innerHTML = "";
+      if (!cams.length) {
+        select.innerHTML = "<option value=''>No cameras listed</option>";
+        return cams;
+      }
+      cams.forEach((d, i) => {
+        const opt = document.createElement("option");
+        opt.value = d.deviceId;
+        opt.textContent = d.label || ("Camera " + (i + 1));
+        select.appendChild(opt);
+      });
+      if (previous && [...select.options].some((o) => o.value === previous)) {
+        select.value = previous;
+      }
+      return cams;
+    }
+
+    function grabJpeg(quality, maxW) {
+      if (!video.videoWidth) return null;
+      const scale = Math.min(1, (maxW || video.videoWidth) / video.videoWidth);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+      canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+      canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL("image/jpeg", quality);
+    }
+
+    function setLive(on) {
+      liveEnabled = on;
+      root.classList.toggle("live", on);
+      if (liveTimer) {
+        clearInterval(liveTimer);
+        liveTimer = null;
+      }
+      if (on) {
+        showOk("Live: sending this device’s camera to the server. Pick a camera above if the wrong one is open.");
+        liveTimer = setInterval(() => {
+          const data = grabJpeg(0.55, 960);
+          if (data) send("streamlit:setComponentValue", { value: data });
+        }, intervalMs);
+      }
+    }
+
+    async function startCamera() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        showError("This browser has no camera API. Use HTTPS (https://MACHINE_NAME:8501) and a current Chrome/Edge/Firefox.");
+        return;
+      }
+      await stopStream();
+      const deviceId = select.value;
+      const constraints = deviceId
+        ? { video: { deviceId: { exact: deviceId } }, audio: false }
+        : { video: true, audio: false };
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (first) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        } catch (err) {
+          showError("Could not open a camera: " + (err && err.message ? err.message : err));
+          return;
+        }
+      }
+      video.srcObject = stream;
+      const cams = await listDevices();
+      const track = stream.getVideoTracks()[0];
+      const settings = track ? track.getSettings() : {};
+      if (settings.deviceId) select.value = settings.deviceId;
+      const label = (track && track.label) ? track.label : "camera";
+      showOk(cams.length + " camera(s) on this device. Using " + label + ".");
+      if (liveEnabled) setLive(true);
+    }
+
+    async function probe() {
+      try {
+        if (!stream) {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          video.srcObject = stream;
+        }
+        const cams = await listDevices();
+        showOk(cams.length + " camera(s) on this device. Pick one, then Start camera.");
+      } catch (err) {
+        showError("Probe failed: " + (err && err.message ? err.message : err));
+      }
+    }
+
+    document.getElementById("start").onclick = startCamera;
+    document.getElementById("refresh").onclick = probe;
+    select.onchange = startCamera;
+    document.getElementById("capture").onclick = () => {
+      const data = grabJpeg(0.92, video.videoWidth);
+      if (!data) {
+        showError("No video yet. Click Start camera and allow access.");
+        return;
+      }
+      send("streamlit:setComponentValue", { value: data });
+      showOk("Still captured. Click Analyze scene.");
+    };
+
+    window.addEventListener("message", (event) => {
+      const data = event.data;
+      if (!data || data.type !== "streamlit:render") return;
+      const args = data.args || {};
+      intervalMs = Number(args.interval_ms) || 300;
+      const wantLive = !!args.live;
+      if (wantLive !== liveEnabled) setLive(wantLive);
+      if (args.scan_token && args.scan_token !== lastScan) {
+        lastScan = args.scan_token;
+        probe();
+      }
+    });
+
+    startCamera().catch((err) => showError(String(err)));
+  </script>
+</body>
+</html>

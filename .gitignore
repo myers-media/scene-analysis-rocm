@@ -25,3 +25,6 @@ hf_cache/
 runs/
 .DS_Store
 Thumbs.db
+certs/*.pem
+certs/*.key
+certs/*.crt

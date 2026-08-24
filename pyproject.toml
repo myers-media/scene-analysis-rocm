@@ -28,6 +28,7 @@ dependencies = [
   "transformers>=4.44.0",
   "accelerate>=0.34.0",
   "safetensors>=0.4.0",
+  "cryptography>=42.0.0",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +40,9 @@ rocm-probe = "scene_analysis.device:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+scene_analysis = ["web_camera_frontend/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

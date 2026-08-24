@@ -35,4 +35,4 @@ if (-not (Test-Path ".venv")) {
 & .\.venv\Scripts\python.exe -m pip install --upgrade pip
 & .\.venv\Scripts\python.exe scripts\install_torch.py --run
 & .\.venv\Scripts\python.exe -m pip install -e .
-& .\.venv\Scripts\python.exe -m streamlit run app.py --server.port $Port
+& .\.venv\Scripts\python.exe scripts\run_ui.py --port $Port

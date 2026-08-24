@@ -28,6 +28,7 @@ from scene_analysis.llm.narrative import NarrativeConfig
 from scene_analysis.pipeline import ScenePipeline, TaskSet
 from scene_analysis.video import analyze_video, read_rgb_frame
 from scene_analysis.viz import draw_detections
+from scene_analysis.web_camera import capture_browser_camera
 
 st.set_page_config(
     page_title="ROCm Scene Analysis",
@@ -272,62 +273,160 @@ def _init_live_state() -> None:
     st.session_state.setdefault("live_fps", 0.0)
     st.session_state.setdefault("live_misses", 0)
     st.session_state.setdefault("live_last_tick", None)
+    st.session_state.setdefault("live_scan_token", 0)
+
+
+def _reset_live_counters() -> None:
+    st.session_state.live_frame_index = 0
+    st.session_state.live_last_tags = []
+    st.session_state.live_last_counts = {}
+    st.session_state.live_fps = 0.0
+    st.session_state.live_misses = 0
+    st.session_state.live_last_tick = None
+
+
+def _show_live_analysis(
+    image: Image.Image,
+    pipeline: ScenePipeline,
+    tasks: TaskSet,
+    conf: float,
+    tag_every: int,
+    allow_slow: bool,
+) -> None:
+    import time
+
+    frame_index = int(st.session_state.live_frame_index)
+    frame_tasks = live_taskset(tasks, frame_index, int(tag_every), allow_slow=allow_slow)
+    analysis = pipeline.analyze_image(image, frame_tasks, conf=conf, source="live")
+    if analysis.scene_tags:
+        st.session_state.live_last_tags = analysis.scene_tags
+    else:
+        analysis.scene_tags = list(st.session_state.live_last_tags)
+    now = time.perf_counter()
+    prev = st.session_state.live_last_tick
+    if prev:
+        dt = now - prev
+        if dt > 0:
+            prev_fps = float(st.session_state.live_fps)
+            inst = 1.0 / dt
+            st.session_state.live_fps = (0.8 * prev_fps + 0.2 * inst) if prev_fps else inst
+    st.session_state.live_last_tick = now
+    st.session_state.live_frame_index = frame_index + 1
+    counts = analysis.label_counts()
+    if counts:
+        st.session_state.live_last_counts = counts
+    annotated = draw_detections(image, analysis.detections, analysis.scene_tags)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("FPS", f"{st.session_state.live_fps:.1f}")
+    m2.metric("Frame", f"{st.session_state.live_frame_index}")
+    m3.metric("Objects", f"{len(analysis.detections)}")
+    m4.metric("Backend", pipeline.device.backend.upper())
+    st.image(annotated, caption="Live annotated feed", use_container_width=True)
+    if analysis.warnings:
+        st.caption(" · ".join(analysis.warnings[:3]))
+    if st.session_state.live_last_counts:
+        st.bar_chart(st.session_state.live_last_counts)
 
 
 def render_live_panel(pipeline: ScenePipeline, tasks: TaskSet, conf: float) -> None:
-    """Continuous capture from a webcam or RTSP stream on the Streamlit host."""
-    import time
-
+    """Live analysis from this browser's webcam or from the Streamlit host."""
     _init_live_state()
-    st.info(
-        "Live camera uses a device attached to **this Streamlit host** (USB webcam, "
-        "`/dev/video*`, or an RTSP/HTTP URL). It is not the browser camera. "
-        "Use **Camera snapshot** to capture a still from this browser."
+    origin = st.radio(
+        "Live camera location",
+        ["This browser (this PC or phone)", "Streamlit host (server)"],
+        horizontal=True,
+        disabled=st.session_state.live_running,
+        key="live_origin",
+        help="This browser uses the same device list as Camera snapshot. Host uses OpenCV on the server.",
     )
-    left, right = st.columns((2, 1), gap="large")
-    with left:
-        source = st.text_input(
-            "Camera source",
-            value="0",
-            disabled=st.session_state.live_running,
-            help="Device index (0, 1, …), a path like /dev/video0, or rtsp://host/stream",
+    browser = origin.startswith("This browser")
+
+    if browser:
+        st.info(
+            "Frames come from **this device’s webcam** (the computer viewing the page). "
+            "Allow access, pick a camera, then Start live feed. "
+            "The Streamlit server camera is the other option above."
         )
+    else:
+        st.info(
+            "Frames come from a webcam or RTSP URL on the **Streamlit host**. "
+            "This is not the camera on a remote laptop — switch to **This browser** for that."
+        )
+
+    left, right = st.columns((2, 1), gap="large")
+    source = "0"
+    width, height = 1280, 720
+    browser_frame = None
     with right:
         resolution = st.selectbox(
-            "Capture size",
+            "Capture size (host only)",
             ["640x480", "1280x720", "1920x1080"],
             index=1,
-            disabled=st.session_state.live_running,
+            disabled=st.session_state.live_running or browser,
         )
-    width, height = (int(part) for part in resolution.split("x"))
+        width, height = (int(part) for part in resolution.split("x"))
+    with left:
+        if browser:
+            if st.button("Probe local cameras", disabled=st.session_state.live_running):
+                st.session_state.live_scan_token = int(st.session_state.live_scan_token) + 1
+                st.rerun()
+            browser_frame = capture_browser_camera(
+                key="live_browser_camera_frames",
+                live=st.session_state.live_running,
+                interval_ms=300,
+                scan_token=int(st.session_state.live_scan_token),
+            )
+        else:
+            host_index = st.selectbox(
+                "Host camera index",
+                ["0", "1", "2", "3", "4", "5"],
+                index=0,
+                disabled=st.session_state.live_running,
+                help="OpenCV index on the Streamlit server.",
+            )
+            custom_source = st.text_input(
+                "Or RTSP / device path",
+                value="",
+                disabled=st.session_state.live_running,
+            )
+            source = custom_source.strip() or host_index
+
     c1, c2, c3 = st.columns(3)
     tag_every = c1.number_input("Refresh tags every N frames", min_value=1, max_value=120, value=15, step=1)
     allow_slow = c2.checkbox("Allow caption/depth on live", value=False)
-    if c3.button("Probe local cameras", disabled=st.session_state.live_running):
-        with st.spinner("Opening camera indexes 0–5…"):
-            found = list_camera_indices(6)
-        if found:
-            st.success("Cameras that returned a frame: " + ", ".join(str(i) for i in found))
-        else:
-            st.warning("No local cameras responded. Try source 0 anyway, or paste an RTSP URL.")
+    if not browser:
+        if c3.button("Probe host cameras", disabled=st.session_state.live_running):
+            with st.spinner("Opening camera indexes 0–5 on the server…"):
+                found = list_camera_indices(6)
+            if found:
+                st.success("Host cameras that returned a frame: " + ", ".join(str(i) for i in found))
+            else:
+                st.warning("No host cameras responded. Try another index or an RTSP URL.")
 
     b1, b2 = st.columns(2)
     if b1.button("Start live feed", type="primary", disabled=st.session_state.live_running, use_container_width=True):
         st.session_state.live_running = True
-        st.session_state.live_frame_index = 0
-        st.session_state.live_last_tags = []
-        st.session_state.live_last_counts = {}
-        st.session_state.live_fps = 0.0
-        st.session_state.live_misses = 0
-        st.session_state.live_last_tick = None
+        _reset_live_counters()
+        if browser:
+            release_live_camera()
         st.rerun()
     if b2.button("Stop", disabled=not st.session_state.live_running, use_container_width=True):
         st.session_state.live_running = False
         release_live_camera()
         st.rerun()
 
+    if browser:
+        if not st.session_state.live_running:
+            st.caption("Allow the camera, pick a device, then Start live feed to run YOLO on this browser’s stream.")
+            return
+        if browser_frame is None:
+            st.info("Waiting for a frame from this browser’s camera…")
+            return
+        _show_live_analysis(browser_frame, pipeline, tasks, conf, tag_every, allow_slow)
+        return
+
     if not st.session_state.live_running:
-        st.caption("Start the feed to run YOLO on every frame. CLIP/composition refresh on the interval above.")
+        st.caption("Start the feed to run YOLO on every host frame. CLIP/composition refresh on the interval above.")
         return
 
     @st.fragment(run_every=timedelta(milliseconds=50))
@@ -347,40 +446,10 @@ def render_live_panel(pipeline: ScenePipeline, tasks: TaskSet, conf: float) -> N
             if st.session_state.live_misses > 20:
                 st.session_state.live_running = False
                 release_live_camera()
-                st.error("Camera stopped producing frames.")
+                st.error("Host camera stopped producing frames.")
             return
         st.session_state.live_misses = 0
-        frame_index = int(st.session_state.live_frame_index)
-        frame_tasks = live_taskset(tasks, frame_index, int(tag_every), allow_slow=allow_slow)
-        analysis = pipeline.analyze_image(image, frame_tasks, conf=conf, source="live")
-        if analysis.scene_tags:
-            st.session_state.live_last_tags = analysis.scene_tags
-        else:
-            analysis.scene_tags = list(st.session_state.live_last_tags)
-        now = time.perf_counter()
-        prev = st.session_state.live_last_tick
-        if prev:
-            dt = now - prev
-            if dt > 0:
-                prev_fps = float(st.session_state.live_fps)
-                inst = 1.0 / dt
-                st.session_state.live_fps = (0.8 * prev_fps + 0.2 * inst) if prev_fps else inst
-        st.session_state.live_last_tick = now
-        st.session_state.live_frame_index = frame_index + 1
-        counts = analysis.label_counts()
-        if counts:
-            st.session_state.live_last_counts = counts
-        annotated = draw_detections(image, analysis.detections, analysis.scene_tags)
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("FPS", f"{st.session_state.live_fps:.1f}")
-        m2.metric("Frame", f"{st.session_state.live_frame_index}")
-        m3.metric("Objects", f"{len(analysis.detections)}")
-        m4.metric("Backend", pipeline.device.backend.upper())
-        st.image(annotated, caption="Live annotated feed", use_container_width=True)
-        if analysis.warnings:
-            st.caption(" · ".join(analysis.warnings[:3]))
-        if st.session_state.live_last_counts:
-            st.bar_chart(st.session_state.live_last_counts)
+        _show_live_analysis(image, pipeline, tasks, conf, tag_every, allow_slow)
 
     live_tick()
 
@@ -529,9 +598,15 @@ def main() -> None:
         render_live_panel(live_pipeline, tasks, conf)
         return
     elif source == "Camera snapshot":
-        shot = st.camera_input("Capture a still from this browser")
-        if shot:
-            image = read_image(shot)
+        st.caption(
+            "This uses the **webcam on the computer viewing the page**, not the Streamlit host. "
+            "Remote access must be HTTPS (https://MACHINE_NAME:8501). "
+            "After Allow, pick the correct camera in the dropdown — Streamlit’s default widget "
+            "often asks for facingMode=user / device 0, which many PCs do not expose."
+        )
+        image = capture_browser_camera()
+        if image is not None:
+            st.image(image, caption="Captured from this browser", use_container_width=True)
     else:
         image = make_demo_image()
         st.caption("Synthetic demo image — useful for checking the UI without a photo.")
