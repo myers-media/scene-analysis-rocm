@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import atexit
 import sys
+import threading
 import time
 from dataclasses import dataclass
 
@@ -106,6 +108,7 @@ class CameraStream:
                 continue
             self._cap = cap
             self._backend = backend
+            atexit.register(self.release)
             return
         raise RuntimeError(
             f"Could not open camera source {self.source!r}. {last_error or ''} "
@@ -130,9 +133,14 @@ class CameraStream:
         return Image.fromarray(np.asarray(rgb))
 
     def release(self) -> None:
-        if self._cap is not None:
-            self._cap.release()
-            self._cap = None
+        cap = self._cap
+        self._cap = None
+        if cap is None:
+            return
+        # DirectShow/MSMF cap.release() can deadlock on Windows; don't block shutdown.
+        worker = threading.Thread(target=cap.release, name="opencv-release", daemon=True)
+        worker.start()
+        worker.join(timeout=1.5)
 
 
 def run_live_window(

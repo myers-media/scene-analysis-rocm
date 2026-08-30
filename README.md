@@ -169,7 +169,7 @@ pip install -e .
 
 ## Run the web UI
 
-Prefer the startup helpers. They create a self-signed TLS certificate (if needed) and bind on all interfaces so another device can use **Camera snapshot** over HTTPS:
+Prefer the startup helpers. They create a self-signed TLS certificate (if needed) and bind on all interfaces so another device can use **Camera snapshot** over HTTPS. **Ctrl+C** in that shell stops Streamlit and any OpenCV camera child processes (a bare `streamlit run` on Windows often ignores Ctrl+C until a browser tab is connected).
 
 ```bash
 ./run.sh          # Linux, WSL2, or Git Bash (works with a Windows `.venv\Scripts` tree)

@@ -9,5 +9,8 @@ font = "sans serif"
 headless = true
 maxUploadSize = 500
 
+[runner]
+fastReruns = true
+
 [browser]
 gatherUsageStats = false
